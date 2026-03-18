@@ -16,7 +16,7 @@ use syslog_writer::{Facility, Severity};
 #[derive(Parser, Debug)]
 #[command(
     name = "syslog-gen",
-    version = "1.0.0",
+    version = "1.1.0",
     about = "Linux syslog 부하 생성기 — TUI에서 실시간 rate/size 조정 가능"
 )]
 struct Cli {
@@ -75,7 +75,7 @@ fn main() {
 
     let threads = cli.threads.max(1);
     let stats = Arc::new(Stats::new());
-    let shared = Arc::new(SharedConfig::new(cli.rate, cli.msg_size, threads as u64));
+    let shared = Arc::new(SharedConfig::new(cli.rate, cli.msg_size, threads as u64, facility, severity));
     let running = Arc::new(AtomicBool::new(true));
 
     // SIGINT 핸들러: Arc::as_ptr로 내부 포인터만 저장 (참조 카운트 변경 없음)
@@ -91,8 +91,6 @@ fn main() {
         let shared_clone = Arc::clone(&shared);
         let running_clone = Arc::clone(&running);
         let config = GeneratorConfig {
-            facility,
-            severity,
             prefix: cli.prefix.clone(),
         };
         handles.push(thread::spawn(move || {
@@ -114,8 +112,6 @@ fn main() {
         let mut app = tui::TuiApp::new(
             Arc::clone(&stats),
             Arc::clone(&shared),
-            facility.to_string(),
-            severity.to_string(),
         );
         if let Err(e) = app.run() {
             eprintln!("TUI 오류: {}", e);

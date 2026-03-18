@@ -14,18 +14,24 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Gauge, Paragraph},
+    widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph},
     Frame, Terminal,
 };
 
+#[derive(PartialEq)]
+enum SelectMode {
+    None,
+    Facility,
+    Severity,
+}
+
 use crate::generator::{SharedConfig, Stats};
 use crate::monitor::{Monitor, SystemStats};
+use crate::syslog_writer::{Facility, Severity, ALL_FACILITIES, ALL_SEVERITIES};
 
 pub struct TuiApp {
     stats: Arc<Stats>,
     shared: Arc<SharedConfig>,
-    facility_name: String,
-    severity_name: String,
     history: VecDeque<f64>,  // 샘플링된 전송률 (logs/sec)
     sys_stats: SystemStats,
     monitor: Monitor,
@@ -35,20 +41,19 @@ pub struct TuiApp {
     prev_sample_time: Instant,
     /// 최근 샘플 전송 바이트/sec
     bytes_rate: u64,
+    // 선택 팝업 상태
+    select_mode: SelectMode,
+    select_index: usize,
 }
 
 impl TuiApp {
     pub fn new(
         stats: Arc<Stats>,
         shared: Arc<SharedConfig>,
-        facility_name: String,
-        severity_name: String,
     ) -> Self {
         Self {
             stats,
             shared,
-            facility_name,
-            severity_name,
             history: VecDeque::with_capacity(120),
             sys_stats: SystemStats::default(),
             monitor: Monitor::new(),
@@ -56,6 +61,8 @@ impl TuiApp {
             prev_bytes_sent: 0,
             prev_sample_time: Instant::now(),
             bytes_rate: 0,
+            select_mode: SelectMode::None,
+            select_index: 0,
         }
     }
 
@@ -101,52 +108,109 @@ impl TuiApp {
                     if key.kind != KeyEventKind::Press {
                         continue;
                     }
-                    match (key.code, key.modifiers) {
-                        // 종료
-                        (KeyCode::Char('q'), _)
-                        | (KeyCode::Char('c'), KeyModifiers::CONTROL) => break,
-
-                        // rate 조절: ↑↓ ±100, ←→ ±1000
-                        (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
-                            self.adjust_rate(100);
-                        }
-                        (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
-                            self.adjust_rate(-100);
-                        }
-                        (KeyCode::Right, _) | (KeyCode::Char('l'), _) => {
-                            self.adjust_rate(1000);
-                        }
-                        (KeyCode::Left, _) | (KeyCode::Char('h'), _) => {
-                            self.adjust_rate(-1000);
-                        }
-                        // rate 10배/1/10
-                        (KeyCode::PageUp, _) => {
-                            let cur = self.shared.rate.load(Ordering::Relaxed);
-                            self.shared.rate.store((cur * 10).min(10_000_000), Ordering::Relaxed);
-                        }
-                        (KeyCode::PageDown, _) => {
-                            let cur = self.shared.rate.load(Ordering::Relaxed);
-                            self.shared.rate.store((cur / 10).max(1), Ordering::Relaxed);
-                        }
-
-                        // 메시지 크기: [/] ±64, {/} ±512
-                        (KeyCode::Char(']'), _) => self.adjust_size(64),
-                        (KeyCode::Char('['), _) => self.adjust_size(-64),
-                        (KeyCode::Char('}'), _) => self.adjust_size(512),
-                        (KeyCode::Char('{'), _) => self.adjust_size(-512),
-
-                        // 일시정지/재개
-                        (KeyCode::Char(' '), _) => {
-                            let p = self.shared.paused.load(Ordering::Relaxed);
-                            self.shared.paused.store(!p, Ordering::Relaxed);
-                            // pause 중에는 latency 통계 리셋
-                            if !p {
-                                self.stats.min_latency_us.store(u64::MAX, Ordering::Relaxed);
-                                self.stats.max_latency_us.store(0, Ordering::Relaxed);
+                    if self.select_mode != SelectMode::None {
+                        // ── 팝업 모드 키 처리 ──────────────────────────────
+                        let list_len = match self.select_mode {
+                            SelectMode::Facility => ALL_FACILITIES.len(),
+                            SelectMode::Severity => ALL_SEVERITIES.len(),
+                            SelectMode::None => 0,
+                        };
+                        match key.code {
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                if self.select_index > 0 { self.select_index -= 1; }
                             }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                if self.select_index + 1 < list_len {
+                                    self.select_index += 1;
+                                }
+                            }
+                            KeyCode::Enter => {
+                                match self.select_mode {
+                                    SelectMode::Facility => {
+                                        self.shared.facility.store(
+                                            ALL_FACILITIES[self.select_index].as_u8(),
+                                            Ordering::Relaxed,
+                                        );
+                                    }
+                                    SelectMode::Severity => {
+                                        self.shared.severity.store(
+                                            ALL_SEVERITIES[self.select_index].as_u8(),
+                                            Ordering::Relaxed,
+                                        );
+                                    }
+                                    SelectMode::None => {}
+                                }
+                                self.select_mode = SelectMode::None;
+                            }
+                            KeyCode::Esc | KeyCode::Char('q') => {
+                                self.select_mode = SelectMode::None;
+                            }
+                            _ => {}
                         }
+                    } else {
+                        // ── 일반 모드 키 처리 ──────────────────────────────
+                        match (key.code, key.modifiers) {
+                            // 종료
+                            (KeyCode::Char('q'), _)
+                            | (KeyCode::Char('c'), KeyModifiers::CONTROL) => break,
 
-                        _ => {}
+                            // rate 조절: ↑↓ ±100, ←→ ±1000
+                            (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
+                                self.adjust_rate(100);
+                            }
+                            (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
+                                self.adjust_rate(-100);
+                            }
+                            (KeyCode::Right, _) | (KeyCode::Char('l'), _) => {
+                                self.adjust_rate(1000);
+                            }
+                            (KeyCode::Left, _) | (KeyCode::Char('h'), _) => {
+                                self.adjust_rate(-1000);
+                            }
+                            // rate 10배/1/10
+                            (KeyCode::PageUp, _) => {
+                                let cur = self.shared.rate.load(Ordering::Relaxed);
+                                self.shared.rate.store((cur * 10).min(10_000_000), Ordering::Relaxed);
+                            }
+                            (KeyCode::PageDown, _) => {
+                                let cur = self.shared.rate.load(Ordering::Relaxed);
+                                self.shared.rate.store((cur / 10).max(1), Ordering::Relaxed);
+                            }
+
+                            // 메시지 크기: [/] ±64, {/} ±512
+                            (KeyCode::Char(']'), _) => self.adjust_size(64),
+                            (KeyCode::Char('['), _) => self.adjust_size(-64),
+                            (KeyCode::Char('}'), _) => self.adjust_size(512),
+                            (KeyCode::Char('{'), _) => self.adjust_size(-512),
+
+                            // facility 팝업
+                            (KeyCode::Char('f'), _) => {
+                                let cur = self.shared.facility.load(Ordering::Relaxed);
+                                self.select_index = ALL_FACILITIES
+                                    .iter().position(|f| f.as_u8() == cur).unwrap_or(0);
+                                self.select_mode = SelectMode::Facility;
+                            }
+                            // severity 팝업
+                            (KeyCode::Char('s'), _) => {
+                                let cur = self.shared.severity.load(Ordering::Relaxed);
+                                self.select_index = ALL_SEVERITIES
+                                    .iter().position(|s| s.as_u8() == cur).unwrap_or(0);
+                                self.select_mode = SelectMode::Severity;
+                            }
+
+                            // 일시정지/재개
+                            (KeyCode::Char(' '), _) => {
+                                let p = self.shared.paused.load(Ordering::Relaxed);
+                                self.shared.paused.store(!p, Ordering::Relaxed);
+                                // pause 중에는 latency 통계 리셋
+                                if !p {
+                                    self.stats.min_latency_us.store(u64::MAX, Ordering::Relaxed);
+                                    self.stats.max_latency_us.store(0, Ordering::Relaxed);
+                                }
+                            }
+
+                            _ => {}
+                        }
                     }
                 }
             }
@@ -191,6 +255,11 @@ impl TuiApp {
         self.render_extended_row(f, chunks[3]);
         self.render_history(f, chunks[4]);
         self.render_help(f, chunks[5]);
+
+        // 팝업은 모든 패널 위에 오버레이
+        if self.select_mode != SelectMode::None {
+            self.render_select_popup(f);
+        }
     }
 
     // ── 설정 제어 패널 ────────────────────────────────────────────────────
@@ -208,6 +277,11 @@ impl TuiApp {
         };
 
         let rate_str = if rate == 0 { "최대".to_string() } else { format!("{}", rate) };
+
+        let fac_name = Facility::from_u8(self.shared.facility.load(Ordering::Relaxed))
+            .map(|f| f.to_string()).unwrap_or_default();
+        let sev_name = Severity::from_u8(self.shared.severity.load(Ordering::Relaxed))
+            .map(|s| s.to_string()).unwrap_or_default();
 
         let lines = vec![
             Line::from(vec![
@@ -228,12 +302,14 @@ impl TuiApp {
             ]),
             Line::from(vec![
                 Span::raw("  facility: "),
-                Span::styled(&self.facility_name, Style::default().fg(Color::White)),
+                Span::styled(format!("{:<8}", fac_name), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(" [f]", Style::default().fg(Color::Yellow)),
                 Span::raw("  severity: "),
-                Span::styled(&self.severity_name, Style::default().fg(Color::White)),
+                Span::styled(format!("{:<7}", sev_name), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(" [s]", Style::default().fg(Color::Yellow)),
                 Span::raw("  threads: "),
                 Span::styled(format!("{}", threads), Style::default().fg(Color::White)),
-                Span::raw("     상태: "),
+                Span::raw("   상태: "),
                 Span::styled(status_str, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
                 Span::raw("  [Space]"),
             ]),
@@ -613,25 +689,102 @@ impl TuiApp {
         let key = |s: &str| Span::styled(s.to_string(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
         let sep = || Span::raw("  ");
 
-        let line = Line::from(vec![
-            key(" ↑↓ "), Span::raw(":rate±100"),  sep(),
-            key(" ←→ "), Span::raw(":rate±1000"), sep(),
-            key(" PgUp/Dn "), Span::raw(":×10÷10"), sep(),
-            key(" [/] "), Span::raw(":size±64"), sep(),
-            key(" {/} "), Span::raw(":size±512"), sep(),
-            key(" Spc "), Span::raw(":일시정지"), sep(),
-            key(" q "), Span::raw(":종료"),
-        ]);
+        let line = if self.select_mode != SelectMode::None {
+            Line::from(vec![
+                key(" ↑↓ "), Span::raw(":이동"), sep(),
+                key(" Enter "), Span::raw(":적용"), sep(),
+                key(" Esc/q "), Span::raw(":취소"),
+            ])
+        } else {
+            Line::from(vec![
+                key(" ↑↓ "), Span::raw(":rate±100"),  sep(),
+                key(" ←→ "), Span::raw(":rate±1000"), sep(),
+                key(" PgUp/Dn "), Span::raw(":×10÷10"), sep(),
+                key(" [/] "), Span::raw(":size±64"), sep(),
+                key(" {/} "), Span::raw(":size±512"), sep(),
+                key(" f "), Span::raw(":facility"), sep(),
+                key(" s "), Span::raw(":severity"), sep(),
+                key(" Spc "), Span::raw(":일시정지"), sep(),
+                key(" q "), Span::raw(":종료"),
+            ])
+        };
 
         let para = Paragraph::new(line)
             .block(Block::default().borders(Borders::ALL).title(" 단축키 "));
         f.render_widget(para, area);
+    }
+
+    // ── 선택 팝업 ─────────────────────────────────────────────────────────
+
+    fn render_select_popup(&self, f: &mut Frame) {
+        let committed_fac = self.shared.facility.load(Ordering::Relaxed);
+        let committed_sev = self.shared.severity.load(Ordering::Relaxed);
+
+        let (title, items): (&str, Vec<ListItem>) = match self.select_mode {
+            SelectMode::Facility => {
+                let items = ALL_FACILITIES
+                    .iter()
+                    .map(|&fac| {
+                        let marker = if fac.as_u8() == committed_fac { "●" } else { " " };
+                        ListItem::new(format!(" {} {}", marker, fac))
+                    })
+                    .collect();
+                (" Facility 선택 ", items)
+            }
+            SelectMode::Severity => {
+                let items = ALL_SEVERITIES
+                    .iter()
+                    .map(|&sev| {
+                        let marker = if sev.as_u8() == committed_sev { "●" } else { " " };
+                        ListItem::new(format!(" {} {}", marker, sev))
+                    })
+                    .collect();
+                (" Severity 선택 ", items)
+            }
+            SelectMode::None => return,
+        };
+
+        let popup_h = (items.len() as u16) + 2; // 항목 수 + 상하 테두리
+        let popup_w = 22u16;
+        let area = popup_rect(popup_h, popup_w, f.area());
+
+        // 팝업 뒤 영역을 지운 후 그림
+        f.render_widget(Clear, area);
+
+        let mut state = ListState::default();
+        state.select(Some(self.select_index));
+
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(title)
+                    .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            )
+            .highlight_style(
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▶");
+
+        f.render_stateful_widget(list, area, &mut state);
     }
 }
 
 // ---------------------------------------------------------------------------
 // 유틸
 // ---------------------------------------------------------------------------
+
+/// 터미널 중앙에 height×width 크기의 팝업 영역을 반환
+fn popup_rect(height: u16, width: u16, area: Rect) -> Rect {
+    let h = height.min(area.height.saturating_sub(2));
+    let w = width.min(area.width.saturating_sub(2));
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    Rect::new(x, y, w, h)
+}
 
 fn fmt_bytes(bytes: u64) -> String {
     if bytes >= 1024 * 1024 * 1024 {

@@ -122,6 +122,48 @@
 
 ---
 
+### 2026-03-18 — v1.1.0 개발 종료 (팝업 선택 UI로 변경)
+
+**변경 사항 (팝업 추가)**:
+- `tui.rs`:
+  - `SelectMode` enum 추가 (None/Facility/Severity)
+  - `TuiApp`에 `select_mode`, `select_index` 필드 추가
+  - `f`/`s` 키 → 팝업 열기 (기존 cycle_facility/cycle_severity 제거)
+  - 팝업 모드 키: ↑↓ 이동, Enter 적용, Esc/q 취소
+  - `render_select_popup()`: Clear+List+ListState 팝업, 현재 적용값에 `●` 표시
+  - `popup_rect()`: 터미널 중앙 배치 유틸
+  - `render_help()`: 팝업 모드일 때 문맥 단축키로 전환
+- `CLI.md`: 팝업 키 안내 업데이트
+
+**빌드 결과**: 경고 0, 에러 0
+
+---
+
+### 2026-03-18 — v1.1.0 개발 종료
+
+**변경 사항**:
+- `syslog_writer.rs`: `Cron(9)`, `AuthPriv(10)`, `Ftp(11)` 추가. `ALL_FACILITIES`, `ALL_SEVERITIES` 상수 배열 추가. `as_u8()`/`from_u8()` 메서드 추가.
+- `generator.rs`: `SharedConfig`에 `facility: AtomicU8`, `severity: AtomicU8` 추가. `GeneratorConfig`에서 facility/severity 제거(SharedConfig로 이동). 루프에서 변경 감지 후 `SyslogWriter` 즉시 재생성.
+- `tui.rs`: `facility_name`/`severity_name` 문자열 필드 제거 → SharedConfig에서 실시간 읽기. `cycle_facility()`/`cycle_severity()` 추가. 키 바인딩 `f/F`(facility 순환), `s/S`(severity 순환). 설정 패널에서 현재 값을 Cyan/Bold로 표시.
+- `main.rs`: `SharedConfig::new()` 시그니처 업데이트, `TuiApp::new()` 시그니처 업데이트.
+- `CLI.md`: facility 목록에 `cron`/`authpriv`/`ftp` 추가, TUI 단축키 표 업데이트.
+
+**빌드 결과**: 경고 0, 에러 0
+
+---
+
+### 2026-03-18 — v1.1.0 facility/severity 런타임 선택 기능 개발 시작
+
+**목표**: TUI에서 facility와 severity를 키보드로 실시간 변경
+
+**PLAN**:
+- `syslog_writer.rs`: 누락 facility(Cron/AuthPriv/Ftp) 추가, ALL_FACILITIES/ALL_SEVERITIES 상수 배열, as_u8()/from_u8() 추가
+- `generator.rs`: SharedConfig에 facility/severity AtomicU8 추가, 루프에서 변경 감지 후 SyslogWriter 재생성
+- `tui.rs`: facility_name/severity_name 제거 → SharedConfig에서 읽기, f/F/s/S 키 순환 바인딩
+- `main.rs`: SharedConfig::new() 시그니처 업데이트
+
+---
+
 ### 2026-03-16 — v1.0.0 2차 코드 리뷰 반영 및 정식 버전 출시
 
 **추가 수정 항목**:

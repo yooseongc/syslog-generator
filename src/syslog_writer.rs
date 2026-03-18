@@ -23,6 +23,9 @@ pub enum Facility {
     Lpr = 6,
     News = 7,
     Uucp = 8,
+    Cron = 9,
+    AuthPriv = 10,
+    Ftp = 11,
     Local0 = 16,
     Local1 = 17,
     Local2 = 18,
@@ -31,6 +34,21 @@ pub enum Facility {
     Local5 = 21,
     Local6 = 22,
     Local7 = 23,
+}
+
+pub const ALL_FACILITIES: &[Facility] = &[
+    Facility::Kern, Facility::User, Facility::Mail, Facility::Daemon,
+    Facility::Auth, Facility::Syslog, Facility::Lpr, Facility::News,
+    Facility::Uucp, Facility::Cron, Facility::AuthPriv, Facility::Ftp,
+    Facility::Local0, Facility::Local1, Facility::Local2, Facility::Local3,
+    Facility::Local4, Facility::Local5, Facility::Local6, Facility::Local7,
+];
+
+impl Facility {
+    pub fn as_u8(self) -> u8 { self as u8 }
+    pub fn from_u8(v: u8) -> Option<Self> {
+        ALL_FACILITIES.iter().copied().find(|f| *f as u8 == v)
+    }
 }
 
 /// syslog severity (priority) 값
@@ -44,6 +62,18 @@ pub enum Severity {
     Notice = 5,
     Info = 6,
     Debug = 7,
+}
+
+pub const ALL_SEVERITIES: &[Severity] = &[
+    Severity::Emergency, Severity::Alert, Severity::Critical, Severity::Error,
+    Severity::Warning, Severity::Notice, Severity::Info, Severity::Debug,
+];
+
+impl Severity {
+    pub fn as_u8(self) -> u8 { self as u8 }
+    pub fn from_u8(v: u8) -> Option<Self> {
+        ALL_SEVERITIES.iter().copied().find(|s| *s as u8 == v)
+    }
 }
 
 pub struct SyslogWriter {
@@ -94,6 +124,9 @@ impl std::str::FromStr for Facility {
             "lpr" => Ok(Facility::Lpr),
             "news" => Ok(Facility::News),
             "uucp" => Ok(Facility::Uucp),
+            "cron" => Ok(Facility::Cron),
+            "authpriv" => Ok(Facility::AuthPriv),
+            "ftp" => Ok(Facility::Ftp),
             "local0" => Ok(Facility::Local0),
             "local1" => Ok(Facility::Local1),
             "local2" => Ok(Facility::Local2),
@@ -119,6 +152,9 @@ impl std::fmt::Display for Facility {
             Facility::Lpr => "lpr",
             Facility::News => "news",
             Facility::Uucp => "uucp",
+            Facility::Cron => "cron",
+            Facility::AuthPriv => "authpriv",
+            Facility::Ftp => "ftp",
             Facility::Local0 => "local0",
             Facility::Local1 => "local1",
             Facility::Local2 => "local2",

@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -9,15 +9,19 @@ pub struct SharedConfig {
     pub rate: AtomicU64,       // 전체 목표 전송률 (0 = 최대 속도)
     pub msg_size: AtomicUsize, // 메시지 목표 크기 (bytes)
     pub paused: AtomicBool,
-    pub num_threads: u64, // 불변 — rate 분배에 사용
+    pub facility: AtomicU8,    // Facility::as_u8() 값
+    pub severity: AtomicU8,    // Severity::as_u8() 값
+    pub num_threads: u64,      // 불변 — rate 분배에 사용
 }
 
 impl SharedConfig {
-    pub fn new(rate: u64, msg_size: usize, num_threads: u64) -> Self {
+    pub fn new(rate: u64, msg_size: usize, num_threads: u64, facility: Facility, severity: Severity) -> Self {
         Self {
             rate: AtomicU64::new(rate),
             msg_size: AtomicUsize::new(msg_size),
             paused: AtomicBool::new(false),
+            facility: AtomicU8::new(facility.as_u8()),
+            severity: AtomicU8::new(severity.as_u8()),
             num_threads,
         }
     }
@@ -51,8 +55,6 @@ impl Stats {
 
 /// 생성기 스레드마다 고정 설정
 pub struct GeneratorConfig {
-    pub facility: Facility,
-    pub severity: Severity,
     pub prefix: String,
 }
 
@@ -134,8 +136,14 @@ pub fn run_generator(
     running: Arc<AtomicBool>,
     thread_id: u64,
 ) {
-    let writer = SyslogWriter::new(config.facility, config.severity);
     let base_prefix = format!("[syslog-gen] {}: ", config.prefix);
+
+    // 초기 facility/severity 로드
+    let mut cur_facility_u8 = shared.facility.load(Ordering::Relaxed);
+    let mut cur_severity_u8 = shared.severity.load(Ordering::Relaxed);
+    let init_fac = Facility::from_u8(cur_facility_u8).unwrap_or(Facility::User);
+    let init_sev = Severity::from_u8(cur_severity_u8).unwrap_or(Severity::Info);
+    let mut writer = SyslogWriter::new(init_fac, init_sev);
 
     // 스레드별로 다른 시드 (seq로 추가 변화)
     let mut lcg = Lcg::new(thread_id.wrapping_add(1) * 0x9e3779b97f4a7c15);
@@ -181,6 +189,15 @@ pub fn run_generator(
             cur_size = new_size;
             let new_cap = pad_capacity(&base_prefix, cur_size);
             pad_buf.resize_if_needed(new_cap, &mut lcg);
+        }
+        let new_fac = shared.facility.load(Ordering::Relaxed);
+        let new_sev = shared.severity.load(Ordering::Relaxed);
+        if new_fac != cur_facility_u8 || new_sev != cur_severity_u8 {
+            cur_facility_u8 = new_fac;
+            cur_severity_u8 = new_sev;
+            let fac = Facility::from_u8(cur_facility_u8).unwrap_or(Facility::User);
+            let sev = Severity::from_u8(cur_severity_u8).unwrap_or(Severity::Info);
+            writer = SyslogWriter::new(fac, sev);
         }
 
         // rate 제어: 목표 시각까지 대기

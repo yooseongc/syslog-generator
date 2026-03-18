@@ -47,8 +47,11 @@ rustup target add x86_64-unknown-linux-musl
 | `-t, --timeout <sec>` | CLI 모드 실행 시간 (0 = TUI 모드) | `0` |
 | `-n, --threads <N>` | 생성기 스레드 수 | `1` |
 
-### facility: `kern`, `user`, `mail`, `daemon`, `auth`, `syslog`, `local0`~`local7`
-### severity: `emerg`, `alert`, `crit`, `err`, `warn`, `notice`, `info`, `debug`
+### facility
+`kern`, `user`, `mail`, `daemon`, `auth`, `syslog`, `lpr`, `news`, `uucp`, `cron`, `authpriv`, `ftp`, `local0`~`local7`
+
+### severity
+`emerg`, `alert`, `crit`, `err`, `warn`, `notice`, `info`, `debug`
 
 ## TUI 단축키
 
@@ -64,6 +67,11 @@ rustup target add x86_64-unknown-linux-musl
 | `[` | 메시지 크기 -64 bytes |
 | `}` | 메시지 크기 +512 bytes |
 | `{` | 메시지 크기 -512 bytes |
+| `f` | facility 선택 팝업 열기 |
+| `s` | severity 선택 팝업 열기 |
+| `↑` / `↓` (팝업 내) | 항목 이동 |
+| `Enter` (팝업 내) | 선택 적용 |
+| `Esc` / `q` (팝업 내) | 팝업 닫기 (취소) |
 | `Space` | 일시정지 / 재개 |
 | `q` / `Ctrl+C` | 종료 |
 
